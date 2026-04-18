@@ -397,6 +397,17 @@ bind_mount (int           proc_fd,
     {
       if (mount (src, dest, NULL, MS_SILENT | MS_BIND | (recursive ? MS_REC : 0), NULL) != 0)
         return BIND_MOUNT_ERROR_MOUNT;
+
+      /* Make the bound subtree private before we read mountinfo and iterate
+       * the remount loop.  Without this there is a TOCTOU race: a mount that
+       * propagates into the slave namespace from the parent after
+       * parse_mountinfo() but before the per-submount MS_REMOUNT can be in a
+       * lazy-detached state, causing the remount to fail with EINVAL.
+       * Making the subtree private also prevents a later-propagated mount
+       * from bypassing the readonly flag we are about to apply. */
+      if (recursive &&
+          mount (NULL, dest, NULL, MS_SILENT | MS_PRIVATE | MS_REC, NULL) != 0)
+        return BIND_MOUNT_ERROR_MOUNT;
     }
 
   /* The mount operation will resolve any symlinks in the destination
