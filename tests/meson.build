@@ -20,6 +20,7 @@ test_scripts = [
   'test-seccomp.py',
   'test-specifying-pidns.sh',
   'test-specifying-userns.sh',
+  'test-mount-parent-umount.sh',
 ]
 
 test_env = environment()
