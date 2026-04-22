@@ -1162,6 +1162,20 @@ privileged_op (int         privileged_op_socket,
             die ("Can't make overlay mount on %s with options %s: "
                 "Overlay directories may not overlap",
                 arg2, arg1);
+          /* userxattr was added in kernel 5.11; retry without it on older kernels. */
+          if (errno == EINVAL)
+            {
+              char *userxattr_pos = strstr (arg1, ",userxattr");
+              if (userxattr_pos != NULL)
+                {
+                  cleanup_free char *opts_no_userxattr = xstrdup (arg1);
+                  char *pos = opts_no_userxattr + (userxattr_pos - arg1);
+                  memmove (pos, pos + strlen (",userxattr"),
+                           strlen (pos + strlen (",userxattr")) + 1);
+                  if (mount ("overlay", arg2, "overlay", MS_MGC_VAL, opts_no_userxattr) == 0)
+                    break;
+                }
+            }
           die_with_mount_error ("Can't make overlay mount on %s with options %s",
                                 arg2, arg1);
         }
