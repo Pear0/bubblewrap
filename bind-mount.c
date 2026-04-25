@@ -19,10 +19,174 @@
 
 #include "config.h"
 
+#include <stdint.h>
 #include <sys/mount.h>
+#include <sys/syscall.h>
 
 #include "utils.h"
 #include "bind-mount.h"
+
+#ifndef AT_RECURSIVE
+#define AT_RECURSIVE 0x8000
+#endif
+
+#ifndef MOUNT_ATTR_RDONLY
+#define MOUNT_ATTR_RDONLY 0x00000001
+#endif
+
+#ifndef MOUNT_ATTR_NOSUID
+#define MOUNT_ATTR_NOSUID 0x00000002
+#endif
+
+#ifndef MOUNT_ATTR_NODEV
+#define MOUNT_ATTR_NODEV 0x00000004
+#endif
+
+/* Keep in sync with the kernel's struct mount_attr, without requiring
+ * build-time kernel headers new enough to define it. */
+struct bwrap_mount_attr
+{
+  uint64_t attr_set;
+  uint64_t attr_clr;
+  uint64_t propagation;
+  uint64_t userns_fd;
+};
+
+static int
+bwrap_mount_setattr (int dfd,
+                     const char *path,
+                     unsigned int flags,
+                     const struct bwrap_mount_attr *attr,
+                     size_t size)
+{
+#ifdef __NR_mount_setattr
+  return (int) syscall (__NR_mount_setattr, dfd, path, flags, attr, size);
+#else
+  errno = ENOSYS;
+  return -1;
+#endif
+}
+
+static bool
+mount_setattr_supported (void)
+{
+  static int supported = -1;
+  char template[] = ".bwrap-mount-api-probeXXXXXX";
+  cleanup_fd int probe_fd = -1;
+  char *probe_dir;
+  bool did_mount = false;
+  struct bwrap_mount_attr attr = {
+    .attr_set = MOUNT_ATTR_RDONLY | MOUNT_ATTR_NOSUID | MOUNT_ATTR_NODEV,
+  };
+
+  if (supported != -1)
+    return supported;
+
+  /* Probe the feature on a small private mount instead of falling back based
+   * on EINVAL from the real bind mount, where EINVAL can mean many things. */
+  probe_dir = mkdtemp (template);
+  if (probe_dir == NULL)
+    {
+      supported = false;
+      return supported;
+    }
+
+  if (mount ("tmpfs", probe_dir, "tmpfs", MS_SILENT | MS_NODEV | MS_NOSUID, "size=4k") != 0)
+    goto out;
+  did_mount = true;
+
+  probe_fd = TEMP_FAILURE_RETRY (open (probe_dir, O_PATH | O_CLOEXEC));
+  if (probe_fd < 0)
+    goto out;
+
+  if (bwrap_mount_setattr (probe_fd, "", AT_EMPTY_PATH | AT_RECURSIVE,
+                           &attr, sizeof (attr)) != 0)
+    goto out;
+
+  supported = true;
+
+out:
+  if (did_mount && umount2 (probe_dir, MNT_DETACH) != 0 && supported == true)
+    supported = false;
+  if (rmdir (probe_dir) != 0 && supported == true)
+    supported = false;
+
+  if (supported == -1)
+    supported = false;
+
+  return supported;
+}
+
+static uint64_t
+bind_options_to_mount_attr (bind_option_t options)
+{
+  uint64_t attr_set = MOUNT_ATTR_NOSUID;
+
+  if ((options & BIND_DEVICES) == 0)
+    attr_set |= MOUNT_ATTR_NODEV;
+
+  if ((options & BIND_READONLY) != 0)
+    attr_set |= MOUNT_ATTR_RDONLY;
+
+  return attr_set;
+}
+
+static bool
+bind_mount_can_use_mount_setattr (const char *src,
+                                  bind_option_t options)
+{
+  struct stat st;
+
+  if (src == NULL)
+    return false;
+
+  if ((options & BIND_RECURSIVE) == 0)
+    return false;
+
+  if (stat (src, &st) != 0)
+    return false;
+
+  if (!S_ISDIR (st.st_mode))
+    return false;
+
+  return mount_setattr_supported ();
+}
+
+static bind_mount_result
+bind_mount_setattr_recursive (const char *dest,
+                              bind_option_t options,
+                              char **failing_path)
+{
+  cleanup_free char *resolved_dest = NULL;
+  cleanup_fd int dest_fd = -1;
+  struct bwrap_mount_attr attr = {
+    .attr_set = bind_options_to_mount_attr (options),
+  };
+
+  resolved_dest = realpath (dest, NULL);
+  if (resolved_dest == NULL)
+    return BIND_MOUNT_ERROR_REALPATH_DEST;
+
+  dest_fd = TEMP_FAILURE_RETRY (open (resolved_dest, O_PATH | O_CLOEXEC));
+  if (dest_fd < 0)
+    {
+      if (failing_path != NULL)
+        *failing_path = steal_pointer (&resolved_dest);
+
+      return BIND_MOUNT_ERROR_REOPEN_DEST;
+    }
+
+  if (bwrap_mount_setattr (dest_fd, "", AT_EMPTY_PATH | AT_RECURSIVE,
+                           &attr, sizeof (attr)) != 0)
+    {
+      if (failing_path != NULL)
+        *failing_path = steal_pointer (&resolved_dest);
+
+      return BIND_MOUNT_ERROR_REMOUNT_DEST;
+    }
+
+  return BIND_MOUNT_SUCCESS;
+}
 
 static char *
 skip_token (char *line, bool eat_whitespace)
@@ -392,12 +556,19 @@ bind_mount (int           proc_fd,
   cleanup_free char *kernel_case_combination = NULL;
   cleanup_fd int dest_fd = -1;
   int i;
+  bool use_mount_setattr = bind_mount_can_use_mount_setattr (src, options);
 
   if (src)
     {
       if (mount (src, dest, NULL, MS_SILENT | MS_BIND | (recursive ? MS_REC : 0), NULL) != 0)
         return BIND_MOUNT_ERROR_MOUNT;
     }
+
+  /* The kernel can apply these flags recursively in one operation. This avoids
+   * the old mountinfo snapshot/remount loop, while preserving bind-mount
+   * semantics by doing the bind itself with mount(2). */
+  if (use_mount_setattr)
+    return bind_mount_setattr_recursive (dest, options, failing_path);
 
   /* The mount operation will resolve any symlinks in the destination
      path, so to find it in the mount table we need to do that too. */

@@ -12,7 +12,8 @@ test_programs = [
 executable(
   'try-syscall',
   'try-syscall.c',
-  override_options: ['b_sanitize=none'],
+  build_by_default : true,
+  override_options : ['b_sanitize=none'],
 )
 
 test_scripts = [
@@ -21,6 +22,8 @@ test_scripts = [
   'test-specifying-pidns.sh',
   'test-specifying-userns.sh',
 ]
+
+race_test_script = 'reproduce-bind-mount-race.sh'
 
 test_env = environment()
 test_env.set('BWRAP', bwrap.full_path())
@@ -70,3 +73,24 @@ foreach test_script : test_scripts
     )
   endif
 endforeach
+
+if meson.version().version_compare('>=0.50.0')
+  test(
+    race_test_script,
+    bash,
+    args : [files(race_test_script)],
+    env : test_env,
+    protocol : 'tap',
+    is_parallel : false,
+    timeout : 90,
+  )
+else
+  test(
+    race_test_script,
+    bash,
+    args : [files(race_test_script)],
+    env : test_env,
+    is_parallel : false,
+    timeout : 90,
+  )
+endif
