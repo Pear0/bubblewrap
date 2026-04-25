@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: LGPL-2.0-or-later
+
+set -euo pipefail
+
+image="${BWRAP_DEV_IMAGE:-bubblewrap-dev:22.04}"
+repo="$(git rev-parse --show-toplevel)"
+tty_args=
+
+if [ -t 0 ] && [ -t 1 ]; then
+    tty_args=-it
+fi
+
+docker build -f "$repo/Dockerfile.dev" -t "$image" "$repo"
+
+exec docker run --rm ${tty_args:+"$tty_args"} \
+    --privileged \
+    --security-opt seccomp=unconfined \
+    --tmpfs /tmp:exec,mode=1777 \
+    -e ASAN_OPTIONS=detect_leaks=0 \
+    -e HOME=/tmp \
+    -v "$repo:/work" \
+    -w /work \
+    "$image" \
+    "${@:-bash}"

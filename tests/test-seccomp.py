@@ -205,7 +205,6 @@ TRY_SYSCALLS = [
     'prctl',
 ]
 
-
 class Test(unittest.TestCase):
     def setUp(self) -> None:
         here = os.path.dirname(os.path.abspath(__file__))
@@ -342,6 +341,8 @@ class Test(unittest.TestCase):
             # these syscalls will legitimately fail with that code, so
             # if they fail like this, it will be as a result of seccomp.
             denylist.add_rule(seccomp.ERRNO(errno.ECONNREFUSED), 'chmod')
+            # Some architectures implement libc chmod() via fchmodat().
+            denylist.add_rule(seccomp.ERRNO(errno.ECONNREFUSED), 'fchmodat')
             denylist.add_rule(seccomp.ERRNO(errno.ECONNREFUSED), 'chroot')
             denylist.add_rule(seccomp.ERRNO(errno.ECONNREFUSED), 'prctl')
             denylist.add_rule(
@@ -411,6 +412,8 @@ class Test(unittest.TestCase):
                     print('# Cannot add {} to allowlist: {!r}'.format(syscall, e))
 
             denylist.add_rule(seccomp.ERRNO(errno.ECONNREFUSED), 'chmod')
+            # Some architectures implement libc chmod() via fchmodat().
+            denylist.add_rule(seccomp.ERRNO(errno.ECONNREFUSED), 'fchmodat')
             denylist.add_rule(seccomp.ERRNO(errno.ECONNREFUSED), 'chroot')
             denylist.add_rule(
                 seccomp.ERRNO(errno.ECONNREFUSED), 'ioctl',

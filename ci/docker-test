@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: LGPL-2.0-or-later
+
+set -euo pipefail
+
+repo="$(git rev-parse --show-toplevel)"
+
+exec "$repo/ci/docker-shell" bash -lc '
+    set -eux
+    rm -rf _build
+    meson _build
+    ninja -C _build -v
+    ./_build/bwrap --bind / / --tmpfs /tmp true
+    BWRAP_MUST_WORK=1 meson test -C _build
+'

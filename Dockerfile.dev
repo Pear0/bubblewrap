@@ -1,0 +1,28 @@
+FROM ubuntu:22.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update \
+    && apt-get -q -y install --no-install-recommends \
+        bash \
+        build-essential \
+        ca-certificates \
+        docbook-xml \
+        docbook-xsl \
+        gdb \
+        git \
+        libcap-dev \
+        libcap2-bin \
+        libselinux1-dev \
+        libtool \
+        meson \
+        ninja-build \
+        pkg-config \
+        python3 \
+        python3-seccomp \
+        strace \
+        util-linux \
+        xsltproc \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /work
